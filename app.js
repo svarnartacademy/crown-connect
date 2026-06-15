@@ -1164,6 +1164,62 @@ async function selectPresetWatchFace(presetName, filePath, cardElement) {
   }
 }
 
+// Helper to flash the alarms section UI
+function flashAlarmsUI() {
+  const section = document.querySelector('.alarms-section');
+  if (section) {
+    section.classList.remove('ui-flash-active');
+    // Force reflow
+    void section.offsetWidth;
+    section.classList.add('ui-flash-active');
+  }
+}
+
+// Helper to play browser audio chime
+function playBrowserChime() {
+  try {
+    initAudioContext();
+    if (audioCtx) {
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+      const now = audioCtx.currentTime;
+      // Play a triple beep chime
+      playNote(880, 'sine', 0.1, now);
+      playNote(880, 'sine', 0.1, now + 0.15);
+      playNote(880, 'sine', 0.15, now + 0.3);
+      rawLog('info', '🔊 Played browser audio chime fallback.');
+    } else {
+      rawLog('warning', 'Audio Context not initialized. Browser chime skipped.');
+    }
+  } catch (err) {
+    rawLog('error', `Failed to play browser chime: ${err.message}`);
+  }
+}
+
+// Helper to try custom MoYoung haptic command
+async function tryMoYoungVibration(level) {
+  try {
+    rawLog('info', 'Watch haptic profile (0x1802) unsupported. Trying custom Fitness Channel (0xFEE0) fallback…');
+    const service = await gattServer.getPrimaryService('0000fee0-0000-1000-8000-00805f9b34fb');
+    let char;
+    try {
+      char = await service.getCharacteristic('0000fee2-0000-1000-8000-00805f9b34fb');
+    } catch (_) {
+      char = await service.getCharacteristic('0000fee1-0000-1000-8000-00805f9b34fb');
+    }
+    const cmd = level > 0 ? 0x01 : 0x00;
+    const value = new Uint8Array([0x05, cmd]);
+    rawLog('info', `Writing custom command [05 ${cmd.toString(16).padStart(2,'0').toUpperCase()}] to characteristic ${char.uuid}…`);
+    await char.writeValue(value);
+    rawLog('success', 'Custom MoYoung vibration command written successfully.');
+    return true;
+  } catch (err) {
+    rawLog('warning', `Custom Fitness Channel haptic command failed: ${err.message}`);
+    return false;
+  }
+}
+
 // ── Vibration Alerts & Alarms ────────────────────────────────
 async function triggerWatchVibration() {
   if (!gattServer || !gattServer.connected) {
@@ -1173,6 +1229,7 @@ async function triggerWatchVibration() {
   const levelSelect = $('vibrationLevel');
   const level = parseInt(levelSelect.value, 10);
   
+  let success = false;
   try {
     rawLog('info', 'Resolving Immediate Alert service (0x1802)…');
     const service = await gattServer.getPrimaryService('immediate_alert');
@@ -1181,6 +1238,7 @@ async function triggerWatchVibration() {
     rawLog('info', `Writing Alert Level = ${level} to Immediate Alert characteristic…`);
     const value = new Uint8Array([level]);
     await char.writeValue(value);
+    success = true;
     
     if (level === 0) {
       showToast('✓ Vibration stopped');
@@ -1190,8 +1248,26 @@ async function triggerWatchVibration() {
       rawLog('success', `Vibration command sent: Alert Level ${level}`);
     }
   } catch (err) {
-    rawLog('error', `Vibration trigger failed: ${err.message}`);
-    showToast('❌ Vibration failed: ' + err.message);
+    rawLog('warning', `Standard Immediate Alert (0x1802) failed: ${err.message}`);
+    
+    // Attempt fallback MoYoung command
+    success = await tryMoYoungVibration(level);
+    
+    if (success) {
+      if (level === 0) {
+        showToast('✓ Vibration stopped via fallback');
+      } else {
+        showToast('✓ Vibration triggered via fallback');
+      }
+    } else {
+      // Complete fallback: Web UI flash + browser audio chime
+      rawLog('warning', 'Watch haptic profiles unsupported or write failed. Falling back to browser alert/chime.');
+      showToast('🔔 Watch vibration failed. Triggering browser chime & flash.');
+      flashAlarmsUI();
+      if (level > 0) {
+        playBrowserChime();
+      }
+    }
   }
 }
 
@@ -1287,12 +1363,14 @@ function startReminderChecker() {
         rawLog('info', `⏰ Reminder triggered: "${r.label}" at ${r.time}`);
         showToast(`⏰ Reminder: ${r.label}`);
         
+        let success = false;
         if (gattServer && gattServer.connected) {
           try {
             const service = await gattServer.getPrimaryService('immediate_alert');
             const char = await service.getCharacteristic('00002a06-0000-1000-8000-00805f9b34fb');
             await char.writeValue(new Uint8Array([2]));
             rawLog('success', `Vibration triggered on watch for reminder: "${r.label}"`);
+            success = true;
             
             setTimeout(async () => {
               if (gattServer && gattServer.connected) {
@@ -1303,8 +1381,24 @@ function startReminderChecker() {
               }
             }, 4000);
           } catch (err) {
-            rawLog('warning', `Could not vibrate watch for reminder: ${err.message}`);
+            rawLog('warning', `Standard vibration failed for reminder: ${err.message}`);
+            // Try MoYoung custom vibration fallback
+            success = await tryMoYoungVibration(2);
+            if (success) {
+              setTimeout(async () => {
+                if (gattServer && gattServer.connected) {
+                  await tryMoYoungVibration(0);
+                  rawLog('info', 'Auto-stopped fallback vibration.');
+                }
+              }, 4000);
+            }
           }
+        }
+        
+        if (!success) {
+          rawLog('warning', `Watch haptic fails for reminder "${r.label}". Falling back to browser chime & flash.`);
+          flashAlarmsUI();
+          playBrowserChime();
         }
       }
       

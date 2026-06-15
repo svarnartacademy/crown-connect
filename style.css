@@ -2491,3 +2491,12 @@ body {
   .stats-grid { grid-template-columns: 1fr; }
   .stat-value { font-size: 2rem; }
 }
+
+/* Custom UI flash keyframes when alarm/vibration triggers */
+@keyframes uiFlashAlarm {
+  0%, 100% { background: rgba(30, 41, 59, 0.4); border-color: var(--border); }
+  50% { background: rgba(239, 68, 68, 0.15); border-color: rgba(239, 68, 68, 0.4); box-shadow: 0 0 15px rgba(239, 68, 68, 0.2); }
+}
+.ui-flash-active {
+  animation: uiFlashAlarm 0.8s ease-in-out 3;
+}
