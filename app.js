@@ -360,6 +360,8 @@ async function connectToWatch() {
         '0000ffd5-0000-1000-8000-00805f9b34fb',
         '00001530-1212-efde-1523-785feabcd123',
         '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
+        '0000feea-0000-1000-8000-00805f9b34fb',
+        '0000feeb-0000-1000-8000-00805f9b34fb',
       ]
     });
 
@@ -827,6 +829,279 @@ async function subscribeRawChar() {
 
 function clearRawLog() {
   $('rawOutput').innerHTML = '<div class="log-line log-info">Log cleared.</div>';
+}
+
+// ── Physical Watch Face Flasher Logic ───────────────────────
+let selectedFlashFile = null;
+let isFlashing = false;
+
+// Toggle Advanced settings accordion
+$('flasherSettingsToggle').addEventListener('click', () => {
+  const form = $('flasherAdvancedForm');
+  const icon = $('flasherSettingsToggle').querySelector('.toggle-icon');
+  if (form.style.display === 'none') {
+    form.style.display = 'flex';
+    icon.classList.add('open');
+  } else {
+    form.style.display = 'none';
+    icon.classList.remove('open');
+  }
+});
+
+// Toggle Snoop Guide accordion
+$('snoopGuideToggle').addEventListener('click', () => {
+  const content = $('snoopGuideContent');
+  const icon = $('snoopGuideToggle').querySelector('.toggle-icon');
+  if (content.style.display === 'none') {
+    content.style.display = 'block';
+    icon.classList.add('open');
+  } else {
+    content.style.display = 'none';
+    icon.classList.remove('open');
+  }
+});
+
+// Dropzone Event Listeners
+const dropzone = $('flasherDropzone');
+const fileInput = $('flasherFileInput');
+
+dropzone.addEventListener('click', (e) => {
+  // Prevent click from bubbling if clicking remove button
+  if (e.target.closest('.btn-remove-file')) return;
+  fileInput.click();
+});
+
+fileInput.addEventListener('change', (e) => {
+  if (e.target.files.length > 0) {
+    handleSelectedFile(e.target.files[0]);
+  }
+});
+
+dropzone.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  dropzone.classList.add('dragover');
+});
+
+dropzone.addEventListener('dragleave', () => {
+  dropzone.classList.remove('dragover');
+});
+
+dropzone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dropzone.classList.remove('dragover');
+  if (e.dataTransfer.files.length > 0) {
+    handleSelectedFile(e.dataTransfer.files[0]);
+  }
+});
+
+function handleSelectedFile(file) {
+  if (!file.name.endsWith('.bin')) {
+    showToast('❌ Only .bin watch face files are supported.');
+    return;
+  }
+  selectedFlashFile = file;
+  $('flasherFileName').textContent = file.name;
+  
+  // Format file size
+  const kb = file.size / 1024;
+  $('flasherFileSize').textContent = kb >= 1024 
+    ? (kb / 1024).toFixed(2) + ' MB' 
+    : kb.toFixed(1) + ' KB';
+    
+  $('flasherFileInfo').style.display = 'flex';
+  $('startFlashBtn').classList.remove('disabled');
+  showToast('✓ Watch face file loaded');
+  rawLog('info', `File loaded: ${file.name} (${file.size} bytes)`);
+}
+
+function removeFlasherFile(event) {
+  if (event) event.stopPropagation();
+  selectedFlashFile = null;
+  fileInput.value = '';
+  $('flasherFileInfo').style.display = 'none';
+  $('startFlashBtn').classList.add('disabled');
+  $('flashProgressPanel').style.display = 'none';
+  showToast('File removed');
+}
+
+// Helper function to sleep
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function startWatchFaceFlash() {
+  if (isFlashing) return;
+  if (!selectedFlashFile) {
+    showToast('❌ Please select a watch face file first.');
+    return;
+  }
+  if (!gattServer || !gattServer.connected) {
+    showToast('❌ Watch is not connected.');
+    return;
+  }
+
+  isFlashing = true;
+  const startBtn = $('startFlashBtn');
+  startBtn.classList.add('flashing');
+  startBtn.disabled = true;
+  $('flashProgressPanel').style.display = 'block';
+  
+  // Update status UI
+  $('flashStatusText').textContent = 'Initializing DFU service…';
+  $('flashProgressPct').textContent = '0%';
+  $('flashProgressFill').style.width = '0%';
+  $('flashSpeedVal').textContent = '0 KB/s';
+  $('flashTimeRemaining').textContent = '--:-- remaining';
+
+  rawLog('info', 'Starting watch face DFU flashing sequence…');
+
+  let notificationChar = null;
+  try {
+    // 1. Get DFU service details from UI inputs
+    const serviceUUID = $('dfuServiceUUID').value.trim().toLowerCase();
+    const cmdCharUUID = $('dfuCmdUUID').value.trim().toLowerCase();
+    const dataCharUUID = $('dfuDataUUID').value.trim().toLowerCase();
+
+    rawLog('info', `Connecting to DFU Service: ${serviceUUID}`);
+    const service = await gattServer.getPrimaryService(serviceUUID);
+
+    // 2. Get characteristics
+    rawLog('info', `Fetching DFU Command Char (${cmdCharUUID}) and Data Char (${dataCharUUID})`);
+    const cmdChar = await service.getCharacteristic(cmdCharUUID);
+    const dataChar = await service.getCharacteristic(dataCharUUID);
+
+    // 3. Subscribe to notifications on status/command response characteristic if possible
+    // Note: Standard Moyoung status char is 0xFEE3. We fallback to command char notification if 0xFEE3 is not specified.
+    const statusUUID = serviceUUID.includes('feea') 
+      ? '0000fee3-0000-1000-8000-00805f9b34fb' 
+      : cmdCharUUID;
+
+    try {
+      rawLog('info', `Subscribing to notifications on ${statusUUID}…`);
+      notificationChar = await service.getCharacteristic(statusUUID);
+      await notificationChar.startNotifications();
+      notificationChar.addEventListener('characteristicvaluechanged', (e) => {
+        const val = new Uint8Array(e.target.value.buffer);
+        const hex = Array.from(val).map(b => b.toString(16).padStart(2,'0').toUpperCase()).join(' ');
+        rawLog('data', `DFU Notification → [${hex}]`);
+      });
+      rawLog('success', 'DFU notifications subscribed.');
+    } catch (e) {
+      rawLog('warning', `Could not subscribe to DFU notifications: ${e.message}. Proceeding anyway.`);
+    }
+
+    // 4. Read file into buffer
+    $('flashStatusText').textContent = 'Reading watch face binary…';
+    const fileBuffer = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsArrayBuffer(selectedFlashFile);
+    });
+
+    const fileBytes = new Uint8Array(fileBuffer);
+    const fileSize = fileBytes.length;
+    rawLog('info', `File loaded into memory. Size: ${fileSize} bytes.`);
+
+    // 5. Send DFU Start Command to FEE2
+    // Command format: [0x01, size_byte0, size_byte1, size_byte2, size_byte3]
+    const startPayload = new Uint8Array(5);
+    startPayload[0] = 0x01; // Start command ID
+    startPayload[1] = fileSize & 0xFF;
+    startPayload[2] = (fileSize >> 8) & 0xFF;
+    startPayload[3] = (fileSize >> 16) & 0xFF;
+    startPayload[4] = (fileSize >> 24) & 0xFF;
+
+    rawLog('info', `Writing DFU Start Command: [01 ${Array.from(startPayload.slice(1)).map(b => b.toString(16).padStart(2,'0').toUpperCase()).join(' ')}]`);
+    await cmdChar.writeValue(startPayload);
+    rawLog('success', 'DFU Start Command accepted.');
+
+    // Wait for watch to process/allocate flash memory
+    $('flashStatusText').textContent = 'Watch ready. Initializing transfer…';
+    await sleep(1000);
+
+    // 6. Loop and send chunks of 256 bytes to FEE5
+    const CHUNK_SIZE = 256;
+    const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
+    let bytesSent = 0;
+    const startTime = Date.now();
+
+    rawLog('info', `Uploading ${totalChunks} data blocks…`);
+    
+    // Temporarily pause keep-alive pinging during flashing to avoid interference
+    stopKeepAlive();
+
+    for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
+      if (!gattServer || !gattServer.connected) {
+        throw new Error('Bluetooth connection lost during flashing!');
+      }
+
+      const offset = chunkIdx * CHUNK_SIZE;
+      const length = Math.min(CHUNK_SIZE, fileSize - offset);
+      const chunk = fileBytes.slice(offset, offset + length);
+
+      // Write block
+      // Web Bluetooth: writeValueWithoutResponse is significantly faster and doesn't wait for link ack
+      await dataChar.writeValueWithoutResponse(chunk);
+      bytesSent += length;
+
+      // Calculate stats
+      const percent = Math.round((bytesSent / fileSize) * 100);
+      const elapsedMs = Date.now() - startTime;
+      const speedKbps = elapsedMs > 0 ? (bytesSent / 1024) / (elapsedMs / 1000) : 0;
+      
+      const remainingBytes = fileSize - bytesSent;
+      const remainingSeconds = speedKbps > 0 ? (remainingBytes / 1024) / speedKbps : 0;
+      const remMin = Math.floor(remainingSeconds / 60);
+      const remSec = Math.floor(remainingSeconds % 60);
+
+      // Update UI
+      $('flashStatusText').textContent = `Uploading block ${chunkIdx + 1} of ${totalChunks}…`;
+      $('flashProgressPct').textContent = `${percent}%`;
+      $('flashProgressFill').style.width = `${percent}%`;
+      $('flashSpeedVal').textContent = `${speedKbps.toFixed(1)} KB/s`;
+      $('flashTimeRemaining').textContent = `${remMin}:${String(remSec).padStart(2,'0')} remaining`;
+
+      // Throttle packet flow slightly to avoid overloading Bluetooth Tx buffers (30ms sleep per block)
+      await sleep(30);
+    }
+
+    // 7. Send DFU Complete/Checksum Command to FEE2
+    // Command format: [0x02] (signal completion/verify/reboot)
+    $('flashStatusText').textContent = 'Verifying watch face flash…';
+    rawLog('info', 'Sending DFU Finish Command [02]…');
+    const finishPayload = new Uint8Array([0x02]);
+    await cmdChar.writeValue(finishPayload);
+    rawLog('success', 'DFU Finish Command sent.');
+
+    // 8. Finalize UI
+    $('flashStatusText').textContent = 'Flash Complete!';
+    $('flashProgressPct').textContent = '100%';
+    $('flashProgressFill').style.width = '100%';
+    showToast('✓ Watch face flashed successfully!');
+    rawLog('success', `Completed flashing ${fileSize} bytes in ${((Date.now() - startTime)/1000).toFixed(1)}s.`);
+    
+    // Wait a brief moment and clean up file input
+    await sleep(2000);
+    removeFlasherFile();
+
+  } catch (err) {
+    rawLog('error', `Flashing failed: ${err.message}`);
+    showToast('❌ Flashing failed: ' + err.message, 5000);
+    $('flashStatusText').textContent = 'Failed: ' + err.message;
+  } finally {
+    isFlashing = false;
+    startBtn.classList.remove('flashing');
+    startBtn.disabled = false;
+    
+    // Clean up notifications if active
+    if (notificationChar) {
+      try {
+        await notificationChar.stopNotifications();
+      } catch (_) {}
+    }
+    
+    // Restart keep-alive pinging
+    startKeepAlive();
+  }
 }
 
 // ── Init ─────────────────────────────────────────────────────
