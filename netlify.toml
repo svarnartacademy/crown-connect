@@ -1,0 +1,20 @@
+# Netlify configuration for Crown Connect
+# Crown R Pro 2 BLE Companion App
+
+[build]
+  publish = "."
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    # Required for Web Bluetooth API
+    Permissions-Policy = "bluetooth=(*)"
+    # Security headers
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
