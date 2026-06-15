@@ -349,11 +349,12 @@ async function connectToWatch() {
     bleDevice = await navigator.bluetooth.requestDevice({
       acceptAllDevices: true,
       optionalServices: [
-        'battery_service', 'heart_rate', 'current_time', 'device_information',
+        'battery_service', 'heart_rate', 'current_time', 'device_information', 'immediate_alert',
         '0000180d-0000-1000-8000-00805f9b34fb',
         '0000180f-0000-1000-8000-00805f9b34fb',
         '00001805-0000-1000-8000-00805f9b34fb',
         '0000180a-0000-1000-8000-00805f9b34fb',
+        '00001802-0000-1000-8000-00805f9b34fb',
         '0000fee0-0000-1000-8000-00805f9b34fb',
         '0000fee1-0000-1000-8000-00805f9b34fb',
         '0000ffd0-0000-1000-8000-00805f9b34fb',
@@ -408,6 +409,10 @@ async function doConnect() {
   await discoverAndRenderServices();
   await readBattery();
   await startHeartRate();
+  await startCustomDataNotifications();
+
+  // Start reminders/scheduler check
+  startReminderChecker();
 }
 
 // ── Auto-Reconnect ──────────────────────────────────────────
@@ -634,6 +639,11 @@ function onHeartRate(event) {
   $('wfBpm').textContent = bpm;
   updateHeartbeatCanvas(bpm);
   rawLog('data', `Heart rate: ${bpm} BPM`);
+
+  // Log to database if logging is active
+  if (isLogging) {
+    logCurrentDataPoint('BPM Update');
+  }
 }
 
 // ── Heartbeat Canvas ─────────────────────────────────────────
@@ -702,6 +712,11 @@ async function readBattery() {
       $('batteryFooter').textContent = lvl >= 20
         ? `Battery at ${lvl}% — Good to go`
         : `Low battery — please charge soon`;
+
+      // Log update if active
+      if (isLogging) {
+        logCurrentDataPoint('Battery Update');
+      }
     };
 
     const val = await batteryChar.readValue();
@@ -1149,7 +1164,630 @@ async function selectPresetWatchFace(presetName, filePath, cardElement) {
   }
 }
 
+// ── Vibration Alerts & Alarms ────────────────────────────────
+async function triggerWatchVibration() {
+  if (!gattServer || !gattServer.connected) {
+    showToast('❌ Watch is not connected.');
+    return;
+  }
+  const levelSelect = $('vibrationLevel');
+  const level = parseInt(levelSelect.value, 10);
+  
+  try {
+    rawLog('info', 'Resolving Immediate Alert service (0x1802)…');
+    const service = await gattServer.getPrimaryService('immediate_alert');
+    const char = await service.getCharacteristic('00002a06-0000-1000-8000-00805f9b34fb');
+    
+    rawLog('info', `Writing Alert Level = ${level} to Immediate Alert characteristic…`);
+    const value = new Uint8Array([level]);
+    await char.writeValue(value);
+    
+    if (level === 0) {
+      showToast('✓ Vibration stopped');
+      rawLog('success', 'Vibration command sent: Alert Level 0 (Off)');
+    } else {
+      showToast('✓ Vibration triggered');
+      rawLog('success', `Vibration command sent: Alert Level ${level}`);
+    }
+  } catch (err) {
+    rawLog('error', `Vibration trigger failed: ${err.message}`);
+    showToast('❌ Vibration failed: ' + err.message);
+  }
+}
+
+let reminders = [];
+let reminderCheckerInterval = null;
+
+function addReminder() {
+  const labelInput = $('reminderLabel');
+  const timeInput = $('reminderTime');
+  const label = labelInput.value.trim() || 'Reminder';
+  const timeVal = timeInput.value;
+  
+  if (!timeVal) {
+    showToast('❌ Please select a time.');
+    return;
+  }
+  
+  const id = Date.now().toString();
+  reminders.push({ id, label, time: timeVal, triggered: false });
+  labelInput.value = '';
+  timeInput.value = '';
+  
+  updateRemindersUI();
+  saveRemindersToStorage();
+  showToast('✓ Reminder scheduled');
+  rawLog('info', `Scheduled reminder "${label}" for ${timeVal}`);
+}
+
+function deleteReminder(id) {
+  reminders = reminders.filter(r => r.id !== id);
+  updateRemindersUI();
+  saveRemindersToStorage();
+  showToast('Reminder deleted');
+}
+
+function updateRemindersUI() {
+  const list = $('remindersList');
+  list.innerHTML = '';
+  
+  if (reminders.length === 0) {
+    list.innerHTML = '<li class="reminder-empty">No active reminders. Schedule one above.</li>';
+    return;
+  }
+  
+  reminders.sort((a, b) => a.time.localeCompare(b.time));
+  
+  reminders.forEach(r => {
+    const li = document.createElement('li');
+    li.className = `reminder-item ${r.triggered ? 'triggered' : ''}`;
+    li.innerHTML = `
+      <div class="reminder-info">
+        <span class="reminder-time-tag">${r.time}</span>
+        <span class="reminder-text">${escapeHtml(r.label)}</span>
+        ${r.triggered ? '<small style="color:var(--emerald);margin-left:6px;">(Sent)</small>' : ''}
+      </div>
+      <button class="btn-delete-reminder" onclick="deleteReminder('${r.id}')" title="Delete">
+        <svg viewBox="0 0 24 24" fill="none" width="16" height="16"><line x1="18" y1="6" x2="6" y2="18" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="6" y1="6" x2="18" y2="18" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    `;
+    list.appendChild(li);
+  });
+}
+
+function saveRemindersToStorage() {
+  localStorage.setItem('ble_reminders', JSON.stringify(reminders));
+}
+
+function loadRemindersFromStorage() {
+  try {
+    const stored = localStorage.getItem('ble_reminders');
+    if (stored) {
+      reminders = JSON.parse(stored);
+      reminders.forEach(r => r.triggered = false);
+      updateRemindersUI();
+    }
+  } catch (e) {
+    console.error('Failed to load reminders:', e);
+  }
+}
+
+function startReminderChecker() {
+  if (reminderCheckerInterval) clearInterval(reminderCheckerInterval);
+  reminderCheckerInterval = setInterval(() => {
+    const now = new Date();
+    const currentH = String(now.getHours()).padStart(2, '0');
+    const currentM = String(now.getMinutes()).padStart(2, '0');
+    const timeStr = `${currentH}:${currentM}`;
+    
+    reminders.forEach(async (r) => {
+      if (r.time === timeStr && !r.triggered) {
+        r.triggered = true;
+        updateRemindersUI();
+        rawLog('info', `⏰ Reminder triggered: "${r.label}" at ${r.time}`);
+        showToast(`⏰ Reminder: ${r.label}`);
+        
+        if (gattServer && gattServer.connected) {
+          try {
+            const service = await gattServer.getPrimaryService('immediate_alert');
+            const char = await service.getCharacteristic('00002a06-0000-1000-8000-00805f9b34fb');
+            await char.writeValue(new Uint8Array([2]));
+            rawLog('success', `Vibration triggered on watch for reminder: "${r.label}"`);
+            
+            setTimeout(async () => {
+              if (gattServer && gattServer.connected) {
+                try {
+                  await char.writeValue(new Uint8Array([0]));
+                  rawLog('info', 'Auto-stopped reminder vibration.');
+                } catch (_) {}
+              }
+            }, 4000);
+          } catch (err) {
+            rawLog('warning', `Could not vibrate watch for reminder: ${err.message}`);
+          }
+        }
+      }
+      
+      if (r.time !== timeStr && r.triggered) {
+        r.triggered = false;
+        updateRemindersUI();
+      }
+    });
+  }, 10000);
+}
+
+// ── Media Player & Watch Remote Mapping ─────────────────────
+let audioCtx = null;
+let synthInterval = null;
+let isMediaPlaying = false;
+let mediaDuration = 90; 
+let mediaCurrentTime = 0;
+let mediaProgressTimer = null;
+let mediaVolume = 70; 
+let mediaVolumeNode = null;
+
+const trackList = [
+  { title: 'BLE Synthwave Wavefront', artist: 'Companion Synthesizer', duration: 90 },
+  { title: 'GATT Protocol Chillout', artist: 'HCI Snoop Log feat. BLE', duration: 120 },
+  { title: 'Heartbeat Frequency', artist: 'Live BPM Ensemble', duration: 75 }
+];
+let currentTrackIdx = 0;
+
+function initAudioContext() {
+  if (audioCtx) return;
+  const AudioContext = window.AudioContext || window.webkitAudioContext;
+  audioCtx = new AudioContext();
+  mediaVolumeNode = audioCtx.createGain();
+  mediaVolumeNode.gain.value = mediaVolume / 100;
+  mediaVolumeNode.connect(audioCtx.destination);
+}
+
+function playNote(freq, type, duration, time) {
+  if (!audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gainNode = audioCtx.createGain();
+  
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, time);
+  
+  gainNode.gain.setValueAtTime(0, time);
+  gainNode.gain.linearRampToValueAtTime(0.18 * (mediaVolume / 100), time + 0.05);
+  gainNode.gain.exponentialRampToValueAtTime(0.0001, time + duration);
+  
+  osc.connect(gainNode);
+  gainNode.connect(mediaVolumeNode);
+  
+  osc.start(time);
+  osc.stop(time + duration);
+}
+
+function playKick(time) {
+  if (!audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain);
+  gain.connect(mediaVolumeNode);
+  
+  osc.frequency.setValueAtTime(150, time);
+  osc.frequency.exponentialRampToValueAtTime(0.01, time + 0.15);
+  
+  gain.gain.setValueAtTime(0.4 * (mediaVolume / 100), time);
+  gain.gain.exponentialRampToValueAtTime(0.001, time + 0.15);
+  
+  osc.start(time);
+  osc.stop(time + 0.15);
+}
+
+function playSnare(time) {
+  if (!audioCtx) return;
+  const bufferSize = audioCtx.sampleRate * 0.15;
+  const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    data[i] = Math.random() * 2 - 1;
+  }
+  
+  const noiseNode = audioCtx.createBufferSource();
+  noiseNode.buffer = buffer;
+  
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'highpass';
+  filter.frequency.setValueAtTime(1000, time);
+  
+  const gain = audioCtx.createGain();
+  gain.gain.setValueAtTime(0.12 * (mediaVolume / 100), time);
+  gain.gain.exponentialRampToValueAtTime(0.01, time + 0.15);
+  
+  noiseNode.connect(filter);
+  filter.connect(gain);
+  gain.connect(mediaVolumeNode);
+  
+  noiseNode.start(time);
+  noiseNode.stop(time + 0.15);
+}
+
+function startSynthPlayback() {
+  initAudioContext();
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+  
+  isMediaPlaying = true;
+  $('mediaPlayBtn').innerHTML = `<svg viewBox="0 0 24 24" fill="none" id="pauseIconSvg"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="currentColor"/></svg>`;
+  $('albumArtDisk').classList.add('playing');
+  
+  let step = 0;
+  const bassNotes = [110, 110, 130, 130, 146, 146, 165, 165]; 
+  const leadNotes = [440, 494, 523, 587, 659, 587, 523, 494, 0, 440, 0, 523, 659, 784, 0, 659];
+  
+  const tempo = 125; 
+  const stepTime = 60 / tempo / 2; 
+  
+  let nextNoteTime = audioCtx.currentTime;
+  
+  function scheduler() {
+    while (nextNoteTime < audioCtx.currentTime + 0.1) {
+      const bassFreq = bassNotes[step % bassNotes.length];
+      playNote(bassFreq, 'sawtooth', 0.25, nextNoteTime);
+      
+      if (step % 4 === 0) {
+        playKick(nextNoteTime);
+      }
+      
+      if (step % 8 === 4) {
+        playSnare(nextNoteTime);
+      }
+      
+      if (step % 2 === 0) {
+        const melodyIdx = (step / 2) % leadNotes.length;
+        const leadFreq = leadNotes[melodyIdx];
+        if (leadFreq > 0) {
+          playNote(leadFreq, 'triangle', stepTime * 1.8, nextNoteTime);
+        }
+      }
+      
+      nextNoteTime += stepTime;
+      step++;
+    }
+  }
+  
+  synthInterval = setInterval(scheduler, 25);
+  
+  mediaProgressTimer = setInterval(() => {
+    mediaCurrentTime++;
+    if (mediaCurrentTime >= mediaDuration) {
+      nextMediaTrack();
+      return;
+    }
+    updateMediaProgressUI();
+  }, 1000);
+}
+
+function stopSynthPlayback() {
+  isMediaPlaying = false;
+  $('mediaPlayBtn').innerHTML = `<svg viewBox="0 0 24 24" fill="none" id="playIconSvg"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>`;
+  $('albumArtDisk').classList.remove('playing');
+  if (synthInterval) { clearInterval(synthInterval); synthInterval = null; }
+  if (mediaProgressTimer) { clearInterval(mediaProgressTimer); mediaProgressTimer = null; }
+}
+
+function toggleMediaPlayback() {
+  if (isMediaPlaying) {
+    stopSynthPlayback();
+    rawLog('info', 'Media Player: Paused.');
+  } else {
+    startSynthPlayback();
+    rawLog('info', `Media Player: Playing "${trackList[currentTrackIdx].title}".`);
+  }
+}
+
+function updateMediaProgressUI() {
+  const slider = $('mediaSlider');
+  const pct = (mediaCurrentTime / mediaDuration) * 100;
+  slider.value = pct;
+  
+  const m = String(Math.floor(mediaCurrentTime / 60)).padStart(2, '0');
+  const s = String(Math.floor(mediaCurrentTime % 60)).padStart(2, '0');
+  $('progressTimeCurrent').textContent = `${m}:${s}`;
+}
+
+function seekMedia(value) {
+  const targetTime = Math.floor((value / 100) * mediaDuration);
+  mediaCurrentTime = targetTime;
+  updateMediaProgressUI();
+  rawLog('info', `Seeked player to ${mediaCurrentTime}s`);
+}
+
+function setMediaVolume(value) {
+  mediaVolume = value;
+  if (mediaVolumeNode) {
+    mediaVolumeNode.gain.value = mediaVolume / 100;
+  }
+}
+
+function prevMediaTrack() {
+  currentTrackIdx = (currentTrackIdx - 1 + trackList.length) % trackList.length;
+  loadTrack(currentTrackIdx);
+}
+
+function nextMediaTrack() {
+  currentTrackIdx = (currentTrackIdx + 1) % trackList.length;
+  loadTrack(currentTrackIdx);
+}
+
+function loadTrack(idx) {
+  const wasPlaying = isMediaPlaying;
+  stopSynthPlayback();
+  
+  const track = trackList[idx];
+  mediaDuration = track.duration;
+  mediaCurrentTime = 0;
+  
+  $('trackTitle').textContent = track.title;
+  $('trackArtist').textContent = track.artist;
+  
+  const m = String(Math.floor(mediaDuration / 60)).padStart(2, '0');
+  const s = String(Math.floor(mediaDuration % 60)).padStart(2, '0');
+  $('progressTimeTotal').textContent = `${m}:${s}`;
+  updateMediaProgressUI();
+  
+  if (wasPlaying) {
+    startSynthPlayback();
+  }
+  rawLog('info', `Loaded track: "${track.title}" by ${track.artist}`);
+}
+
+function handleIncomingMusicControl(cmdByte) {
+  const cmdMap = {
+    0x01: 'PLAY_PAUSE',
+    0x02: 'NEXT',
+    0x03: 'PREV',
+    0x04: 'VOL_UP',
+    0x05: 'VOL_DOWN'
+  };
+  
+  const cmdName = cmdMap[cmdByte] || `UNKNOWN_CMD_${cmdByte.toString(16).toUpperCase()}`;
+  $('lastBleCommand').textContent = cmdName;
+  rawLog('data', `BLE Remote Command: ${cmdName} (0x${cmdByte.toString(16).toUpperCase()})`);
+  
+  const ind = $('bleMusicIndicator');
+  ind.className = 'pulse-indicator status-orange';
+  setTimeout(() => {
+    ind.className = 'pulse-indicator status-green';
+  }, 1000);
+  
+  if (cmdByte === 0x01) {
+    toggleMediaPlayback();
+  } else if (cmdByte === 0x02) {
+    nextMediaTrack();
+    showToast('Skip Next (Watch Remote)');
+  } else if (cmdByte === 0x03) {
+    prevMediaTrack();
+    showToast('Skip Previous (Watch Remote)');
+  } else if (cmdByte === 0x04) {
+    const newVal = Math.min(mediaVolume + 10, 100);
+    setMediaVolume(newVal);
+    $('mediaVolumeSlider').value = newVal;
+    showToast('Volume Up (Watch Remote)');
+  } else if (cmdByte === 0x05) {
+    const newVal = Math.max(mediaVolume - 10, 0);
+    setMediaVolume(newVal);
+    $('mediaVolumeSlider').value = newVal;
+    showToast('Volume Down (Watch Remote)');
+  }
+}
+
+// ── Custom Fitness Channel (0xFEE0 / 0xFEE1) ─────────────────
+async function startCustomDataNotifications() {
+  try {
+    rawLog('info', 'Resolving proprietary fitness service (0xFEE0)…');
+    const svc = await gattServer.getPrimaryService('0000fee0-0000-1000-8000-00805f9b34fb');
+    const char = await svc.getCharacteristic('0000fee1-0000-1000-8000-00805f9b34fb');
+    
+    rawLog('info', 'Subscribing to notifications on characteristic 0xFEE1…');
+    await char.startNotifications();
+    char.addEventListener('characteristicvaluechanged', onCustomDataNotification);
+    notifyActive.set(char.uuid, char);
+    rawLog('success', 'Proprietary channel notifications active.');
+  } catch (err) {
+    rawLog('warning', `Fitness service (0xFEE0) not available: ${err.message}. Custom watch gestures might not sync.`);
+  }
+}
+
+function onCustomDataNotification(event) {
+  const value = event.target.value;
+  const bytes = new Uint8Array(value.buffer);
+  
+  const hex = Array.from(bytes).map(b => b.toString(16).padStart(2,'0').toUpperCase()).join(' ');
+  rawLog('data', `OEM Notify [0xFEE1] → [${hex}]`);
+  
+  // Parse commands/data:
+  if (bytes.length >= 2 && bytes[0] === 0x05) {
+    const musicCmd = bytes[1];
+    if (musicCmd >= 1 && musicCmd <= 5) {
+      handleIncomingMusicControl(musicCmd);
+      return;
+    }
+  }
+  
+  if (bytes.length >= 5 && bytes[0] === 0x08) {
+    const steps = bytes[1] | (bytes[2] << 8) | (bytes[3] << 16) | (bytes[4] << 24);
+    if (steps >= 0 && steps < 100000) {
+      liveData.steps = steps;
+      $('stepsValue').textContent = steps.toLocaleString('en-IN');
+      const pct = Math.min((steps / 10000) * 100, 100);
+      $('stepsFill').style.width = pct + '%';
+      $('stepsStatus').textContent = 'Live';
+      $('stepsFooter').textContent = `${Math.round(pct)}% of 10,000 goal`;
+      if (isLogging) {
+        logCurrentDataPoint('Steps Sync');
+      }
+    }
+  }
+  
+  if (bytes.length >= 2 && bytes[0] === 0x12) {
+    const spo2 = bytes[1];
+    if (spo2 >= 80 && spo2 <= 100) {
+      setSpO2(spo2);
+      $('spo2Status').textContent = 'Live';
+      if (isLogging) {
+        logCurrentDataPoint('SpO2 Sync');
+      }
+    }
+  }
+}
+
+// ── Health Data Logger ──────────────────────────────────────
+let isLogging = false;
+let loggedData = [];
+let periodicLoggerInterval = null;
+
+function toggleLogging() {
+  const btn = $('loggerToggleBtn');
+  const txt = $('loggerToggleText');
+  const indText = $('loggerIndicatorText');
+  
+  if (isLogging) {
+    isLogging = false;
+    btn.classList.remove('active');
+    txt.textContent = 'Start Data Logging';
+    indText.textContent = '● Logging Inactive';
+    indText.style.color = 'var(--text-secondary)';
+    rawLog('info', 'Data Logging paused.');
+    if (periodicLoggerInterval) {
+      clearInterval(periodicLoggerInterval);
+      periodicLoggerInterval = null;
+    }
+  } else {
+    isLogging = true;
+    btn.classList.add('active');
+    txt.textContent = 'Pause Data Logging';
+    indText.textContent = '● Logging Active';
+    indText.style.color = 'var(--emerald)';
+    rawLog('info', 'Data Logging started.');
+    
+    if (gattServer && gattServer.connected) {
+      logCurrentDataPoint('Manual Start');
+    }
+    
+    periodicLoggerInterval = setInterval(() => {
+      if (isLogging && gattServer && gattServer.connected) {
+        logCurrentDataPoint('Periodic');
+      }
+    }, 15000);
+  }
+}
+
+function logCurrentDataPoint(triggerSource = 'Periodic') {
+  if (!isLogging) return;
+  
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString('en-IN', { hour12: false });
+  const dateStr = now.toLocaleDateString('en-IN');
+  const timestamp = `${dateStr} ${timeStr}`;
+  
+  const bpm = liveData.bpm || '—';
+  const battery = liveData.battery !== null ? `${liveData.battery}%` : '—';
+  const steps = liveData.steps !== null ? liveData.steps : '—';
+  const spo2 = liveData.spo2 !== null ? `${liveData.spo2}%` : '—';
+  
+  const record = {
+    timestamp,
+    bpm,
+    battery,
+    steps,
+    spo2,
+    status: triggerSource
+  };
+  
+  loggedData.push(record);
+  
+  if (loggedData.length > 100) {
+    loggedData.shift();
+  }
+  
+  updateLoggerUI();
+  updateLoggedCount();
+}
+
+function updateLoggedCount() {
+  $('loggedRowsCount').textContent = `${loggedData.length} records logged`;
+}
+
+function clearDataLog() {
+  loggedData = [];
+  updateLoggerUI();
+  updateLoggedCount();
+  showToast('Log cleared');
+  rawLog('info', 'Cleared all logged health records.');
+}
+
+function updateLoggerUI() {
+  const tbody = $('loggerTableBody');
+  tbody.innerHTML = '';
+  
+  if (loggedData.length === 0) {
+    tbody.innerHTML = `
+      <tr class="table-empty">
+        <td colspan="6">No logs recorded yet. Start logging to record data points automatically.</td>
+      </tr>
+    `;
+    return;
+  }
+  
+  const rows = [...loggedData].reverse();
+  rows.forEach(r => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${r.timestamp}</td>
+      <td style="color:var(--rose);font-weight:600;">${r.bpm}</td>
+      <td style="color:var(--emerald);">${r.battery}</td>
+      <td style="color:var(--blue);">${r.steps}</td>
+      <td style="color:var(--cyan);">${r.spo2}</td>
+      <td><span class="spec-tag spec-style">${r.status}</span></td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function downloadCSVLog() {
+  if (loggedData.length === 0) {
+    showToast('❌ No data points to download.');
+    return;
+  }
+  
+  let csvContent = 'data:text/csv;charset=utf-8,';
+  csvContent += 'Timestamp,Heart Rate (BPM),Battery Level,Steps,SpO2,Status\n';
+  
+  loggedData.forEach(r => {
+    const row = [
+      `"${r.timestamp}"`,
+      `"${r.bpm}"`,
+      `"${r.battery}"`,
+      `"${r.steps}"`,
+      `"${r.spo2}"`,
+      `"${r.status}"`
+    ].join(',');
+    csvContent += row + '\n';
+  });
+  
+  const encodedUri = encodeURI(csvContent);
+  const link = document.createElement('a');
+  link.setAttribute('href', encodedUri);
+  const now = new Date();
+  const datestamp = now.toISOString().slice(0,10);
+  link.setAttribute('download', `crown_connect_health_log_${datestamp}.csv`);
+  document.body.appendChild(link);
+  
+  link.click();
+  document.body.removeChild(link);
+  showToast('✓ CSV Downloaded');
+  rawLog('success', 'Health CSV log downloaded successfully.');
+}
+
 // ── Init ─────────────────────────────────────────────────────
 checkBrowser();
+loadRemindersFromStorage();
 rawLog('info', 'Crown Connect v2.0 ready — BLE auto-reconnect + keep-alive enabled.');
 rawLog('info', 'Click "Scan & Connect" to begin.');
+
