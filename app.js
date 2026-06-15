@@ -921,6 +921,11 @@ function removeFlasherFile(event) {
   $('flasherFileInfo').style.display = 'none';
   $('startFlashBtn').classList.add('disabled');
   $('flashProgressPanel').style.display = 'none';
+  
+  // Reset preset gallery highlights
+  const cards = document.querySelectorAll('.gallery-card');
+  cards.forEach(c => c.classList.remove('selected'));
+  
   showToast('File removed');
 }
 
@@ -1101,6 +1106,46 @@ async function startWatchFaceFlash() {
     
     // Restart keep-alive pinging
     startKeepAlive();
+  }
+}
+
+async function selectPresetWatchFace(presetName, filePath, cardElement) {
+  try {
+    // 1. Highlight selected card
+    const cards = document.querySelectorAll('.gallery-card');
+    cards.forEach(c => c.classList.remove('selected'));
+    if (cardElement) {
+      cardElement.classList.add('selected');
+    }
+
+    rawLog('info', `Loading preset watch face: ${presetName} from ${filePath}…`);
+    showToast(`Loading ${presetName}…`);
+
+    // 2. Fetch the file via HTTP
+    const res = await fetch(filePath);
+    if (!res.ok) {
+      throw new Error(`Server returned status ${res.status}`);
+    }
+    const blob = await res.blob();
+
+    // 3. Create a File object from blob (so it works like user-uploaded file)
+    selectedFlashFile = new File([blob], `${presetName.toLowerCase().replace(/\s+/g, '_')}.bin`, { type: 'application/octet-stream' });
+    
+    // 4. Update uploader UI
+    $('flasherFileName').textContent = selectedFlashFile.name;
+    const kb = selectedFlashFile.size / 1024;
+    $('flasherFileSize').textContent = kb >= 1024 
+      ? (kb / 1024).toFixed(2) + ' MB' 
+      : kb.toFixed(1) + ' KB';
+      
+    $('flasherFileInfo').style.display = 'flex';
+    $('startFlashBtn').classList.remove('disabled');
+    
+    showToast(`✓ Loaded ${presetName}`);
+    rawLog('success', `Preset "${presetName}" loaded successfully (${selectedFlashFile.size} bytes).`);
+  } catch (err) {
+    rawLog('error', `Failed to load preset "${presetName}": ${err.message}`);
+    showToast(`❌ Failed to load preset: ${err.message}`);
   }
 }
 

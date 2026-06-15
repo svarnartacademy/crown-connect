@@ -1442,6 +1442,361 @@ body {
   margin-bottom: 0;
 }
 
+/* ----------- Watch Face Gallery Grid Styles ----------- */
+.gallery-wrapper {
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+}
+
+.gallery-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  letter-spacing: -0.01em;
+}
+
+.gallery-subtitle {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-bottom: 18px;
+}
+
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.gallery-card {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  transition: var(--transition);
+  position: relative;
+  overflow: hidden;
+}
+
+.gallery-card:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--border-glow);
+  transform: translateY(-2px);
+}
+
+.gallery-card.selected {
+  background: rgba(6, 182, 212, 0.05);
+  border-color: var(--cyan);
+  box-shadow: 0 0 15px rgba(6, 182, 212, 0.2);
+}
+
+/* Previews (Simulated Watches) */
+.preset-preview {
+  width: 110px;
+  height: 110px;
+  border-radius: 50%;
+  border: 4px solid #111827;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4), inset 0 0 10px rgba(0,0,0,0.8);
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #030712;
+  flex-shrink: 0;
+}
+
+/* 1. Aether Mono */
+.preset-aether {
+  background: radial-gradient(circle, #0f172a 0%, #020617 100%);
+}
+.preset-preview-time {
+  font-family: var(--font-mono);
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #f8fafc;
+}
+.preset-preview-line {
+  position: absolute;
+  bottom: 30px;
+  width: 50%;
+  height: 2px;
+  background: var(--blue);
+  box-shadow: 0 0 5px var(--blue);
+}
+
+/* 2. Chrono Royal */
+.preset-chrono {
+  background: radial-gradient(circle, #1e293b 0%, #0f172a 100%);
+  border-color: #334155;
+}
+.preset-dial {
+  width: 90%;
+  height: 90%;
+  border-radius: 50%;
+  border: 1px dashed rgba(255,255,255,0.1);
+  position: relative;
+}
+.dial-hand {
+  position: absolute;
+  left: 50%;
+  bottom: 50%;
+  background: #f1f5f9;
+  transform-origin: bottom center;
+  border-radius: 2px;
+}
+.hand-h {
+  width: 2px;
+  height: 25px;
+  transform: rotate(30deg);
+}
+.hand-m {
+  width: 1.5px;
+  height: 35px;
+  transform: rotate(120deg);
+  background: var(--cyan);
+}
+
+/* 3. Cyberpunk Grid */
+.preset-cyberpunk {
+  background: #000;
+  background-image: 
+    linear-gradient(rgba(244, 63, 94, 0.15) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(244, 63, 94, 0.15) 1px, transparent 1px);
+  background-size: 8px 8px;
+}
+.preset-neon-text {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #f43f5e;
+  text-shadow: 0 0 5px #f43f5e;
+}
+.preset-grid-lines {
+  position: absolute;
+  bottom: 12px;
+  width: 80%;
+  height: 1px;
+  background: #34d399;
+  box-shadow: 0 0 4px #34d399;
+}
+
+/* 4. Aura Flow */
+.preset-aura {
+  background: #030712;
+}
+.aurora-orb {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--violet) 0%, var(--cyan) 70%, transparent 100%);
+  filter: blur(10px);
+  animation: auraAnim 6s ease-in-out infinite alternate;
+}
+@keyframes auraAnim {
+  0% { transform: scale(0.8) translate(-5px, -5px); }
+  100% { transform: scale(1.1) translate(5px, 5px); }
+}
+
+/* 5. Active Pulse */
+.preset-active {
+  background: #020617;
+}
+.pulse-wave {
+  position: absolute;
+  width: 100%;
+  height: 30px;
+  background-image: linear-gradient(90deg, transparent 50%, rgba(244, 63, 94, 0.1) 50%), linear-gradient(rgba(244, 63, 94, 0.15) 1px, transparent 1px);
+  background-size: 4px 100%, 100% 4px;
+  top: 40px;
+  border-bottom: 1px solid rgba(244, 63, 94, 0.4);
+}
+.pulse-bpm {
+  font-size: 1rem;
+  font-weight: 800;
+  color: #fb7185;
+  z-index: 2;
+  text-shadow: 0 0 8px rgba(244, 63, 94, 0.6);
+}
+
+/* 6. Retro Quartz */
+.preset-retro {
+  background: #2e3c30;
+}
+.quartz-screen {
+  background: #7ca982;
+  border: 1px solid #1a251c;
+  color: #0f1a11;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 4px 6px;
+  border-radius: 2px;
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.3);
+}
+
+/* 7. Midnight Astro */
+.preset-midnight {
+  background: radial-gradient(circle, #0b132b 0%, #010409 100%);
+}
+.moon-orbit {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.08);
+  position: relative;
+}
+.moon-orbit::after {
+  content: '';
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e2e8f0;
+  box-shadow: 0 0 5px #e2e8f0;
+}
+
+/* 8. Vapor Wave */
+.preset-vapor {
+  background: linear-gradient(180deg, #2e0854 0%, #0b0214 100%);
+}
+.vapor-sun {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #ff007f 0%, #ffaa00 100%);
+  position: relative;
+  box-shadow: 0 0 10px #ff007f;
+}
+.vapor-sun::after {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 50%;
+  background: linear-gradient(transparent 10%, #0b0214 10%, #0b0214 20%, transparent 20%, transparent 30%, #0b0214 30%, #0b0214 45%, transparent 45%, transparent 55%, #0b0214 55%, #0b0214 75%, transparent 75%);
+}
+
+/* 9. Carbon Pro */
+.preset-carbon {
+  background: linear-gradient(45deg, #111 25%, transparent 25%), linear-gradient(-45deg, #111 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #111 75%), linear-gradient(-45deg, transparent 75%, #111 75%);
+  background-size: 8px 8px;
+  background-color: #1a1a1a;
+}
+.carbon-subdial {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--text-muted);
+  background: rgba(0,0,0,0.5);
+  position: relative;
+}
+.carbon-subdial::after {
+  content: '';
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 12px; height: 1px;
+  background: var(--rose);
+  transform-origin: left center;
+  transform: rotate(-45deg);
+}
+
+/* 10. Zen Garden */
+.preset-zen {
+  background: radial-gradient(circle, #083344 0%, #020617 100%);
+}
+.zen-ripple {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  border: 1px solid rgba(6, 182, 212, 0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.zen-ripple::after {
+  content: '';
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid rgba(6, 182, 212, 0.25);
+}
+
+/* Info & Select Button */
+.preset-info {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: center;
+}
+
+.preset-name {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.preset-specs {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.spec-tag {
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.spec-hz {
+  background: rgba(6, 182, 212, 0.1);
+  color: var(--cyan);
+  border: 1px solid rgba(6, 182, 212, 0.15);
+}
+
+.spec-style {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+
+.btn-select-preset {
+  width: 100%;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.03);
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.gallery-card:hover .btn-select-preset {
+  border-color: var(--blue);
+  background: rgba(59, 130, 246, 0.1);
+  color: #fff;
+}
+
+.gallery-card.selected .btn-select-preset {
+  background: linear-gradient(135deg, var(--blue), var(--cyan));
+  border: none;
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(6, 182, 212, 0.3);
+}
+
 /* ----------- Responsive ----------- */
 @media (max-width: 800px) {
   .flasher-ui-grid {
