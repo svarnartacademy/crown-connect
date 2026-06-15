@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="theme-color" content="#050b1a" />
   <meta name="description" content="Goboult Crown R Pro 2 BLE Companion App — Connect and monitor your smartwatch via Bluetooth." />
   <title>Crown Connect — Goboult Crown R Pro 2</title>
@@ -90,6 +91,36 @@
         <div class="connect-hint">
           <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><path d="M12 16v-4m0-4h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
           Make sure your watch's Bluetooth is enabled and it's in pairing mode
+        </div>
+      </div>
+    </section>
+
+    <!-- Custom Watch Face Section -->
+    <section class="watch-face-section" id="watchFaceSection" style="display:none;">
+      <div class="wf-wrapper">
+        <div class="wf-canvas-wrap">
+          <canvas id="watchFaceCanvas" width="300" height="300"></canvas>
+          <button class="wf-theme-btn" onclick="cycleTheme()" title="Change theme">
+            <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <div class="wf-data-panel">
+          <div class="wf-data-title">Live Watch Face</div>
+          <p class="wf-data-desc">Your Goboult Crown R Pro 2 — custom digital face with real BLE data</p>
+          <div class="wf-chips">
+            <div class="wf-chip chip-heart">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z" stroke="currentColor" stroke-width="1.5"/></svg>
+              <span id="wfBpm">--</span> <small>BPM</small>
+            </div>
+            <div class="wf-chip chip-batt">
+              <svg viewBox="0 0 24 24" fill="none"><rect x="2" y="7" width="18" height="10" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M22 11v2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              <span id="wfBattery">--%</span>
+            </div>
+          </div>
+          <div class="wf-ble-note">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M6.5 7.5L17.5 16.5L12 22V2L17.5 7.5L6.5 16.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            BLE data updates in real-time. Heart rate and battery display directly on the watch face.
+          </div>
         </div>
       </div>
     </section>
